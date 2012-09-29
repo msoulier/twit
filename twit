@@ -1,0 +1,391 @@
+#!/usr/bin/env python
+
+import os
+activate_this = os.environ['HOME'] + '/envs/twitter/bin/activate_this.py'
+if os.path.exists(activate_this):
+    execfile(activate_this, dict(__file__=activate_this))
+
+import tweepy, getpass, sys, textwrap, shelve, time, logging
+from smtplib import SMTP
+from optparse import OptionParser
+import re
+from tweepy import TweepError
+
+can_notify = can_osd = True
+
+try:
+    import gtk
+    import pygtk
+    pygtk.require('2.0')
+except:
+    can_notify = False
+    sys.stderr.write("warning: pygtk 2.0+ not found\n")
+
+try:
+    import pynotify
+except:
+    can_notify = False
+    sys.stderr.write("warning: pynotify not found, cannot use --notify option\n")
+
+try:
+    import pyosd
+except:
+    can_osd = False
+    sys.stderr.write("warning: pyosd not found, cannot use --osd option\n")
+
+logformat = '%(message)s'
+logging.basicConfig(format=logformat)
+log = logging.getLogger('twit')
+log.setLevel(logging.INFO)
+
+CONSUMER_KEY = ''
+CONSUMER_SECRET = ''
+ACCESS_KEY = '-erw9KOeX0uiIEw3Gg1rpahtEeP5aERrjY2D9ArTBq'
+ACCESS_SECRET = ''
+
+datafile = None
+data = None
+
+def parse_options():
+    usage = """\
+twit.py <--post <text> | --public | --home | --user=<user> |
+         --conversation <tweet id> | --fetch <tweet id> >
+        [options]
+"""
+    parser = OptionParser(usage=usage)
+    parser.add_option('-v',
+                      '--verbose',
+                      action='store_true',
+                      help="increase verbosity of output for debugging")
+    parser.add_option('-H',
+                      '--home',
+                      action='store_true',
+                      help="fetch home timeline")
+    parser.add_option('-p',
+                      '--public',
+                      action='store_true',
+                      help="fetch public timeline")
+    parser.add_option('-P',
+                      '--post',
+                      action='store',
+                      help="post new tweet")
+    parser.add_option('-e',
+                      '--email',
+                      action='store_true',
+                      help="send tweet via email")
+    parser.add_option('-o',
+                      '--osd',
+                      action='store_true',
+                      help="display tweet with osd")
+    parser.add_option('-q',
+                      '--quiet',
+                      action='store_true',
+                      help="display no output on stdout except errors")
+    parser.add_option('-m',
+                      '--mailserver',
+                      action="store",
+                      dest="mailserver",
+                      default="localhost",
+                      help="the host or IP of the mail server to use if the --email option is used (localhost)")
+    parser.add_option('-u',
+                      '--user',
+                      action='store',
+                      dest='user',
+                      help="fetch a user timeline for the given user")
+    parser.add_option('-f',
+                      '--fetch',
+                      action='store',
+                      dest='fetch',
+                      help="fetch a particular tweet and display it")
+    parser.add_option('-l',
+                      '--loop',
+                      action="store_true",
+                      default=False,
+                      dest="loop",
+                      help="do not exit, continually loop, querying twitter every 60 seconds")
+    parser.add_option('-c',
+                      '--conversation',
+                      action='store',
+                      dest='conversation',
+                      help="starting with the passed tweet id, pull out the entire conversation and display it")
+    parser.add_option('-t',
+                      '--toaddr',
+                      action='store',
+                      dest='toaddr',
+                      help="to address for email support")
+    parser.add_option('-n',
+                      '--newonly',
+                      action='store_true',
+                      dest='newonly',
+                      default=False,
+                      help="only display new posts in terminal")
+    parser.add_option('-N',
+                      '--notify',
+                      action='store_true',
+                      dest='notify',
+                      default=False,
+                      help='use pynotify to display tweet on desktop')
+    parser.add_option('-T',
+                      '--timeout',
+                      action='store',
+                      dest='timeout',
+                      default=5,
+                      type='int',
+                      help='set timeout in seconds for on-screen displays (5)')
+    parser.add_option('-i',
+                      '--interval',
+                      action='store',
+                      type='int',
+                      default=60,
+                      dest='interval',
+                      help='polling interval in seconds (60)')
+
+    options, args = parser.parse_args()
+
+    if not ( options.home or
+             options.public or
+             options.post or
+             options.user or
+             options.fetch or
+             options.conversation ):
+        parser.print_help()
+        sys.exit(1)
+
+    if options.email and not options.toaddr:
+        log.error("the --toaddr option is required when the --email option is specified")
+        parser.print_help()
+        sys.exit(1)
+
+    if options.quiet and options.newonly:
+        log.error("there is no point in quieting the terminal and specifying --newonly")
+        parser.print_help()
+        sys.exit(1)
+
+    # Check for disabled features.
+    if not can_notify and options.notify:
+        sys.stderr.write("The --notify option is disabled.\n")
+        parser.print_help()
+        sys.exit(1)
+
+    if not can_osd and options.osd:
+        sys.stderr.write("The --osd option is disabled.\n")
+        parser.print_help()
+        sys.exit(1)
+
+    if args:
+        parser.print_help()
+        sys.exit(1)
+
+    return options
+
+def authorize():
+    auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+    auth_url = auth.get_authorization_url()
+    log.info('Please authorize: ' + auth_url)
+    verifier = raw_input('PIN: ').strip()
+    auth.get_access_token(verifier)
+    log.info("ACCESS_KEY = '%s'" % auth.access_token.key)
+    log.info("ACCESS_SECRET = '%s'" % auth.access_token.secret)
+
+def update(api, msg):
+    api.update_status(msg)
+
+def notify_post(status, options):
+    pynotify.init("Twit")
+    text = re.sub(r'(http://\S+)', r'<a href="\1">\1</a>', status.text)
+    n = pynotify.Notification("Tweet by %s" % status.user.name, text)
+    n.set_timeout(options.timeout * 1000)
+    helper = gtk.Button()
+    icon = helper.render_icon(gtk.STOCK_DIALOG_INFO,
+                              gtk.ICON_SIZE_DIALOG)
+    n.set_icon_from_pixbuf(icon)
+    if not n.show():
+        raise RuntimeException, "pynotify failed to send notification"
+    time.sleep(options.timeout)
+
+def osd_post(status, options):
+    lines = []
+    lines.append("%s" % status.user.name)
+    for line in textwrap.wrap(status.text, 60):
+        myline = line.encode('latin1', 'ignore')
+        lines.append(myline)
+
+    p = pyosd.osd(lines=len(lines))
+    p.set_pos(pyosd.POS_BOT)
+    p.set_align(pyosd.ALIGN_RIGHT)
+    p.set_outline_offset(5)
+    p.set_font("lucidasanstypewriter-bold-18")
+    p.set_timeout(options.timeout)
+    p.set_colour("#00FF00")
+
+    lineno = 0
+    for line in lines:
+        p.display(line, line=lineno)
+        lineno += 1
+        
+    p.wait_until_no_display()
+
+def email_post(status, options):
+    from_addr = 'do-not-reply@digitaltorque.ca'
+    to_addrs = [options.toaddr]
+    content = ''
+    for line in textwrap.wrap(status.text, 80):
+        content += line + "\n"
+    content = content.encode('ascii', 'ignore')
+    email = """\
+From: %s
+To: %s
+Subject: new twitter post
+
+%s
+%s
+%s
+""" % (from_addr, ','.join(to_addrs), status.created_at, status.user.name,
+       content)
+    s = SMTP()
+    if options.verbose:
+        s.set_debuglevel(1)
+    s.connect(options.mailserver)
+    s.sendmail(from_addr, to_addrs, email)
+
+def print_status(status):
+    log.info('-'*80)
+    log.info("%s (%s)" % (status.created_at, status.id_str))
+    reply = ''
+    if status.in_reply_to_screen_name:
+        reply = "=> %s (%s)" % ( status.in_reply_to_screen_name,
+                                 status.in_reply_to_status_id_str )
+    log.info("%s (%s) %s" % (status.user.name, status.user.screen_name, reply))
+    for line in textwrap.wrap(status.text, 80):
+        log.info(line)
+
+def handle_timeline(statuslist, options):
+    newonly = options.newonly
+    for status in reversed(statuslist):
+        if not newonly:
+            print_status(status)
+        if data is not None:
+            key = str(status.id_str)
+            if not data.has_key(key):
+                data[key] = status
+                if newonly:
+                    print_status(status)
+                else:
+                    log.info("*** New post ***")
+                if options.email:
+                    email_post(status, options)
+                if options.osd:
+                    osd_post(status, options)
+                if options.notify:
+                    notify_post(status, options)
+        else:
+            log.warn("No picked data! Can't tell what is new.")
+
+def user_timeline(api, options):
+    if options.firstloop:
+        s = "User Timeline for %s" % options.user
+        log.info(s)
+        log.info("=" * len(s))
+    handle_timeline(api.user_timeline(options.user), options)
+
+def public_timeline(api, options):
+    if options.firstloop:
+        log.info("Public Timeline:")
+        log.info("================")
+    handle_timeline(api.public_timeline(), options)
+
+def home_timeline(api, options):
+    if options.firstloop:
+        log.info("Home Timeline Reversed:")
+        log.info("=======================")
+    handle_timeline(api.home_timeline(), options)
+
+def fetch_conversation(api, options):
+    log.info("Conversation starting with tweet %s" % options.conversation)
+    tweets = []
+    tweet = api.get_status(options.conversation)
+    if tweet:
+        tweets.append(tweet)
+
+    while tweet.in_reply_to_status_id_str:
+        tweet = api.get_status(tweet.in_reply_to_status_id_str)
+        if tweet:
+            tweets.append(tweet)
+        else:
+            break
+
+    handle_timeline(tweets, options)
+
+def fetch_tweet(api, options):
+    tweet = api.get_status(options.fetch)
+    handle_timeline([tweet], options)
+
+def initialize():
+    global datafile, data
+    homedir = os.environ.get('HOME', '')
+    if not homedir:
+        sys.stderr.write("Can't initialize, HOME environment variable not set\n")
+        return
+
+    rcdir = os.path.join(homedir, '.twit')
+    if not os.path.exists(rcdir):
+        os.mkdir(rcdir, 0700)
+    elif not os.path.isdir(rcdir):
+        sys.stderr.write("%s is not a directory, cannot initialize\n" % rcdir)
+        return
+
+    datafile = os.path.join(rcdir, 'data')
+    data = shelve.open(datafile)
+
+def cleanup():
+    if data:
+        data.close()
+
+def main():
+    options = parse_options()
+    if options.quiet:
+        log.setLevel(logging.WARN)
+    elif options.verbose:
+        log.setLevel(logging.DEBUG)
+
+    initialize()
+    auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+    auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
+    api = tweepy.API(auth)
+
+    if options.notify:
+        pynotify.init("Twit")
+
+    options.firstloop = True
+    while True:
+        try:
+            if options.public:
+                public_timeline(api, options)
+            elif options.home:
+                home_timeline(api, options)
+            elif options.user:
+                user_timeline(api, options)
+            elif options.fetch:
+                fetch_tweet(api, options)
+            elif options.conversation:
+                fetch_conversation(api, options)
+            elif options.post:
+                update(api, options.post)
+
+        except TweepError, err:
+            sys.stderr.write("Error from Twitter: %s\n" % str(err))
+
+        except Exception, err:
+            sys.stderr.write("Unknown error: %s\n" % str(err))
+
+        options.firstloop = False
+
+        if options.loop:
+            time.sleep(options.interval)
+        else:
+            break
+
+    cleanup()
+
+if __name__ == '__main__':
+    main()
