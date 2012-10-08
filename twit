@@ -5,11 +5,12 @@ activate_this = os.environ['HOME'] + '/envs/twitter/bin/activate_this.py'
 if os.path.exists(activate_this):
     execfile(activate_this, dict(__file__=activate_this))
 
-import tweepy, getpass, sys, textwrap, shelve, time, logging
+import tweepy, getpass, sys, textwrap, time, logging
 from smtplib import SMTP
 from optparse import OptionParser
 import re
 from tweepy import TweepError
+import simplejson as json
 
 can_notify = can_osd = True
 
@@ -38,13 +39,16 @@ logging.basicConfig(format=logformat)
 log = logging.getLogger('twit')
 log.setLevel(logging.INFO)
 
-CONSUMER_KEY = ''
-CONSUMER_SECRET = ''
-ACCESS_KEY = '-erw9KOeX0uiIEw3Gg1rpahtEeP5aERrjY2D9ArTBq'
-ACCESS_SECRET = ''
-
 datafile = None
 data = None
+
+def load_config(options):
+    if os.path.exists(options.conf):
+        config = json.load(open(options.conf, "r"))
+        return config
+
+    else:
+        raise IOError, "Config file does exist: %s" % options.conf
 
 def parse_options():
     usage = """\
@@ -103,7 +107,7 @@ twit.py <--post <text> | --public | --home | --user=<user> |
                       default=False,
                       dest="loop",
                       help="do not exit, continually loop, querying twitter every 60 seconds")
-    parser.add_option('-c',
+    parser.add_option('-C',
                       '--conversation',
                       action='store',
                       dest='conversation',
@@ -139,6 +143,15 @@ twit.py <--post <text> | --public | --home | --user=<user> |
                       default=60,
                       dest='interval',
                       help='polling interval in seconds (60)')
+    parser.add_option('-c',
+                      '--conf',
+                      action='store',
+                      default=os.path.join(os.environ['HOME'], '.twitrc.json'),
+                      help='override default config file location')
+    parser.add_option('-D',
+                      '--datafile',
+                      action='store',
+                      default=os.path.join(os.environ['HOME'], '.twit.dat'))
 
     options, args = parser.parse_args()
 
@@ -178,14 +191,19 @@ twit.py <--post <text> | --public | --home | --user=<user> |
 
     return options
 
-def authorize():
-    auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
+def authorize(options):
+    """This function is used to authorize a new client for the first time. It
+    is not currently called."""
+    tokens = options.config.get('TOKENS', {})
+    auth = tweepy.OAuthHandler(tokens['CONSUMER_KEY'],
+                               tokens['CONSUMER_SECRET'])
     auth_url = auth.get_authorization_url()
     log.info('Please authorize: ' + auth_url)
     verifier = raw_input('PIN: ').strip()
     auth.get_access_token(verifier)
     log.info("ACCESS_KEY = '%s'" % auth.access_token.key)
     log.info("ACCESS_SECRET = '%s'" % auth.access_token.secret)
+    log.info("Please add these tokens to your %s file" % options.conf)
 
 def update(api, msg):
     api.update_status(msg)
@@ -267,7 +285,10 @@ def handle_timeline(statuslist, options):
         if data is not None:
             key = str(status.id_str)
             if not data.has_key(key):
-                data[key] = status
+                data[key] = {
+                    'id': status.id,
+                    'time': status.created_at.strftime("%s")
+                    }
                 if newonly:
                     print_status(status)
                 else:
@@ -320,26 +341,33 @@ def fetch_tweet(api, options):
     tweet = api.get_status(options.fetch)
     handle_timeline([tweet], options)
 
-def initialize():
+def initialize(options):
     global datafile, data
     homedir = os.environ.get('HOME', '')
     if not homedir:
         sys.stderr.write("Can't initialize, HOME environment variable not set\n")
-        return
+        sys.exit(1)
 
-    rcdir = os.path.join(homedir, '.twit')
-    if not os.path.exists(rcdir):
-        os.mkdir(rcdir, 0700)
-    elif not os.path.isdir(rcdir):
-        sys.stderr.write("%s is not a directory, cannot initialize\n" % rcdir)
-        return
+    # Load config and pass it back in the options object.
+    options.config = load_config(options)
 
-    datafile = os.path.join(rcdir, 'data')
-    data = shelve.open(datafile)
+    datafile = options.datafile
+    if os.path.exists(datafile):
+        try:
+            data = json.load(open(datafile, "r"))
+        except json.JSONDecodeError, err:
+            log.warn("Parse error in datafile: %s" % str(err))
+            log.warn("Serialized data will not be loaded")
+            data = {}
+    else:
+        data = {}
 
-def cleanup():
+def cleanup(options):
     if data:
-        data.close()
+        log.debug("saving datafile %s" % options.datafile)
+        json.dump(data, open(options.datafile, "w"))
+    else:
+        log.debug("no data to save")
 
 def main():
     options = parse_options()
@@ -348,9 +376,18 @@ def main():
     elif options.verbose:
         log.setLevel(logging.DEBUG)
 
-    initialize()
-    auth = tweepy.OAuthHandler(CONSUMER_KEY, CONSUMER_SECRET)
-    auth.set_access_token(ACCESS_KEY, ACCESS_SECRET)
+    initialize(options)
+    tokens = options.config.get('TOKENS', {})
+    access_key = tokens.get('ACCESS_KEY', '')
+
+    if not access_key:
+        authorize(options)
+        sys.exit(0)
+
+    auth = tweepy.OAuthHandler(tokens['CONSUMER_KEY'],
+                               tokens['CONSUMER_SECRET'])
+    auth.set_access_token(tokens['ACCESS_KEY'],
+                          tokens['ACCESS_SECRET'])
     api = tweepy.API(auth)
 
     if options.notify:
@@ -385,7 +422,7 @@ def main():
         else:
             break
 
-    cleanup()
+    cleanup(options)
 
 if __name__ == '__main__':
     main()
