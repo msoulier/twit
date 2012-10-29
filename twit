@@ -152,6 +152,11 @@ twit.py <--post <text> | --public | --home | --user=<user> |
                       '--datafile',
                       action='store',
                       default=os.path.join(os.environ['HOME'], '.twit.dat'))
+    parser.add_option('-r',
+                      '--reply',
+                      action='store',
+                      type='int',
+                      help='tweet ID to reply to')
 
     options, args = parser.parse_args()
 
@@ -205,8 +210,13 @@ def authorize(options):
     log.info("ACCESS_SECRET = '%s'" % auth.access_token.secret)
     log.info("Please add these tokens to your %s file" % options.conf)
 
-def update(api, msg):
-    api.update_status(msg)
+def update(api, options):
+    msg = options.post
+    reply_to_id = options.reply
+    if not reply_to_id:
+        api.update_status(msg)
+    else:
+        api.update_status(msg, in_reply_to_status_id=reply_to_id)
 
 def notify_post(status, options):
     pynotify.init("Twit")
@@ -300,7 +310,7 @@ def handle_timeline(statuslist, options):
                 if options.notify:
                     notify_post(status, options)
         else:
-            log.warn("No picked data! Can't tell what is new.")
+            log.warn("No saved data! Can't tell what is new.")
 
 def user_timeline(api, options):
     if options.firstloop:
@@ -407,7 +417,7 @@ def main():
             elif options.conversation:
                 fetch_conversation(api, options)
             elif options.post:
-                update(api, options.post)
+                update(api, options)
 
         except TweepError, err:
             sys.stderr.write("Error from Twitter: %s\n" % str(err))
