@@ -52,9 +52,7 @@ def load_config(options):
 
 def parse_options():
     usage = """\
-twit.py <--post <text> | --public | --home | --user=<user> |
-         --conversation <tweet id> | --fetch <tweet id> >
-        [options]
+twit.py <options>
 """
     parser = OptionParser(usage=usage)
     parser.add_option('-v',
@@ -162,6 +160,15 @@ twit.py <--post <text> | --public | --home | --user=<user> |
                       action='store_true',
                       default=False,
                       help='fetch mentions for the current user')
+    parser.add_option('-R',
+                      '--retweet',
+                      action='store',
+                      type='int',
+                      help='tweet ID of a tweet to retweet')
+    parser.add_option('-F',
+                      '--friends',
+                      action='store_true',
+                      help='fetch friends timeline')
 
     options, args = parser.parse_args()
 
@@ -171,9 +178,21 @@ twit.py <--post <text> | --public | --home | --user=<user> |
              options.user or
              options.fetch or
              options.mentions or
+             options.retweet or
+             options.friends or
              options.conversation ):
         parser.print_help()
         sys.exit(1)
+
+    # Don't allow looping on posting options.
+    if not ( options.home or
+             options.public or
+             options.friends or
+             options.mentions ):
+
+        if options.loop:
+            log.error("You cannot loop in this mode, and probably don't want to.")
+            sys.exit(1)
 
     if options.email and not options.toaddr:
         log.error("the --toaddr option is required when the --email option is specified")
@@ -223,6 +242,11 @@ def update(api, options):
         api.update_status(msg)
     else:
         api.update_status(msg, in_reply_to_status_id=reply_to_id)
+
+def retweet(api, options):
+    retweet_id = options.retweet
+    assert( retweet_id )
+    api.retweet(retweet_id)
 
 def notify_post(status, options):
     pynotify.init("Twit")
@@ -331,6 +355,12 @@ def public_timeline(api, options):
         log.info("================")
     handle_timeline(api.public_timeline(), options)
 
+def friends_timeline(api, options):
+    if options.firstloop:
+        log.info("Friends Timeline:")
+        log.info("=================")
+    handle_timeline(api.friends_timeline(), options)
+
 def home_timeline(api, options):
     if options.firstloop:
         log.info("Home Timeline Reversed:")
@@ -432,6 +462,10 @@ def main():
                 update(api, options)
             elif options.mentions:
                 mentions(api, options)
+            elif options.retweet:
+                retweet(api, options)
+            elif options.friends:
+                friends_timeline(api, options)
 
         except TweepError, err:
             sys.stderr.write("Error from Twitter: %s\n" % str(err))
@@ -441,12 +475,14 @@ def main():
 
         options.firstloop = False
 
+        # Unconditionally clean up, because it does things like saving the
+        # data file for long running twit processes.
+        cleanup(options)
+
         if options.loop:
             time.sleep(options.interval)
         else:
             break
-
-    cleanup(options)
 
 if __name__ == '__main__':
     main()
