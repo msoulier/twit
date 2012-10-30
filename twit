@@ -157,6 +157,11 @@ twit.py <--post <text> | --public | --home | --user=<user> |
                       action='store',
                       type='int',
                       help='tweet ID to reply to')
+    parser.add_option('-M',
+                      '--mentions',
+                      action='store_true',
+                      default=False,
+                      help='fetch mentions for the current user')
 
     options, args = parser.parse_args()
 
@@ -165,6 +170,7 @@ twit.py <--post <text> | --public | --home | --user=<user> |
              options.post or
              options.user or
              options.fetch or
+             options.mentions or
              options.conversation ):
         parser.print_help()
         sys.exit(1)
@@ -331,6 +337,12 @@ def home_timeline(api, options):
         log.info("=======================")
     handle_timeline(api.home_timeline(), options)
 
+def mentions(api, options):
+    if options.firstloop:
+        log.info("Mentions for you:")
+        log.info("=================")
+    handle_timeline(api.mentions(), options)
+
 def fetch_conversation(api, options):
     log.info("Conversation starting with tweet %s" % options.conversation)
     tweets = []
@@ -418,6 +430,8 @@ def main():
                 fetch_conversation(api, options)
             elif options.post:
                 update(api, options)
+            elif options.mentions:
+                mentions(api, options)
 
         except TweepError, err:
             sys.stderr.write("Error from Twitter: %s\n" % str(err))
