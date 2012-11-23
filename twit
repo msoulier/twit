@@ -12,27 +12,35 @@ import re
 from tweepy import TweepError
 import simplejson as json
 
-can_notify = can_osd = True
+can_appkit = can_libnotify = can_osd = False
+# For OS X
+notifCenter = None
 
 try:
     import gtk
     import pygtk
     pygtk.require('2.0')
+    can_libnotify = True
 except:
-    can_notify = False
-    sys.stderr.write("warning: pygtk 2.0+ not found\n")
+    pass
 
 try:
     import pynotify
 except:
-    can_notify = False
-    sys.stderr.write("warning: pynotify not found, cannot use --notify option\n")
+    can_libnotify = False
 
 try:
     import pyosd
 except:
     can_osd = False
-    sys.stderr.write("warning: pyosd not found, cannot use --osd option\n")
+
+if sys.platform == 'darwin':
+    # Check for AppKit.
+    try:
+        import AppKit
+        can_appkit = True
+    except:
+        can_appkit = False
 
 logformat = '%(message)s'
 logging.basicConfig(format=logformat)
@@ -126,7 +134,7 @@ twit.py <options>
                       action='store_true',
                       dest='notify',
                       default=False,
-                      help='use pynotify to display tweet on desktop')
+                      help='use pynotify or AppKit to display tweet on desktop')
     parser.add_option('-T',
                       '--timeout',
                       action='store',
@@ -205,7 +213,12 @@ twit.py <options>
         sys.exit(1)
 
     # Check for disabled features.
-    if not can_notify and options.notify:
+    # Need libnotify if not on OS X
+    if sys.platform != 'darwin' and not can_libnotify and options.notify:
+        sys.stderr.write("The --notify option is disabled.\n")
+        parser.print_help()
+        sys.exit(1)
+    elif sys.platform == 'darwin' and not can_appkit:
         sys.stderr.write("The --notify option is disabled.\n")
         parser.print_help()
         sys.exit(1)
@@ -248,7 +261,7 @@ def retweet(api, options):
     assert( retweet_id )
     api.retweet(retweet_id)
 
-def notify_post(status, options):
+def notify_libnotify(status, options):
     pynotify.init("Twit")
     text = re.sub(r'(http://\S+)', r'<a href="\1">\1</a>', status.text)
     n = pynotify.Notification("Tweet by %s" % status.user.name, text)
@@ -260,6 +273,29 @@ def notify_post(status, options):
     if not n.show():
         raise RuntimeException, "pynotify failed to send notification"
     time.sleep(options.timeout)
+
+def notify_appkit(status, options):
+    """Thanks to
+    https://github.com/albertz/music-player/blob/master/notifications.py
+    for how to do this."""
+    global notifCenter
+    if not notifCenter:
+        notifCenter = \
+            AppKit.NSUserNotificationCenter.defaultUserNotificationCenter()
+        appDelegate = AppKit.NSApplication.sharedApplication().delegate()
+        notifCenter.setDelegate_(appDelegate)
+
+    notif = AppKit.NSUserNotification.alloc().init()
+    title = "Tweet by %s" % status.user.name
+    notif.setTitle_(title)
+    notif.setInformativeText_(status.text)
+    notifCenter.deliverNotification_(notif)
+
+def notify_post(status, options):
+    if sys.platform == 'darwin':
+        notify_appkit(status, options)
+    else:
+        notify_libnotify(status, options)
 
 def osd_post(status, options):
     lines = []
@@ -442,7 +478,7 @@ def main():
                           tokens['ACCESS_SECRET'])
     api = tweepy.API(auth)
 
-    if options.notify:
+    if options.notify and sys.platform != 'darwin':
         pynotify.init("Twit")
 
     options.firstloop = True
