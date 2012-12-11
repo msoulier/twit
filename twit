@@ -280,15 +280,25 @@ def notify_appkit(status, options):
     for how to do this."""
     global notifCenter
     if not notifCenter:
+        # borrowed from
+        # http://stackoverflow.com/questions/6744633/hide-python-launcher-icon-for-new-qapplication
+        # https://developer.apple.com/library/mac/#documentation/AppKit/Reference/NSRunningApplication_Class/Reference/Reference.html
+        NSApplicationActivationPolicyRegular = 0
+        NSApplicationActivationPolicyAccessory = 1
+        NSApplicationActivationPolicyProhibited = 2
         notifCenter = \
             AppKit.NSUserNotificationCenter.defaultUserNotificationCenter()
-        appDelegate = AppKit.NSApplication.sharedApplication().delegate()
+        app = AppKit.NSApplication.sharedApplication()
+        app.setActivationPolicy_(NSApplicationActivationPolicyProhibited)
+        appDelegate = app.delegate()
         notifCenter.setDelegate_(appDelegate)
 
     notif = AppKit.NSUserNotification.alloc().init()
     title = "Tweet by %s" % status.user.name
     notif.setTitle_(title)
     notif.setInformativeText_(status.text)
+    url = 'http://home.digitaltorque.ca'
+    notif.setUserInfo_( {"action": "open_url", "value": url} )
     notifCenter.deliverNotification_(notif)
 
 def notify_post(status, options):
