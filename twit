@@ -300,6 +300,7 @@ def notify_appkit(status, options):
     url = 'http://home.digitaltorque.ca'
     notif.setUserInfo_( {"action": "open_url", "value": url} )
     notifCenter.deliverNotification_(notif)
+    time.sleep(options.timeout)
 
 def notify_post(status, options):
     if sys.platform == 'darwin':
