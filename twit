@@ -1,5 +1,29 @@
 #!/usr/bin/env python
 
+"""
+class MountainLionNotification(Foundation.NSObject, Notification):
+
+    def notify(self, title, subtitle, text, url):
+        NSUserNotification = objc.lookUpClass('NSUserNotification')
+        NSUserNotificationCenter = objc.lookUpClass('NSUserNotificationCenter')
+        notification = NSUserNotification.alloc().init()
+        notification.setTitle_(str(title))
+        notification.setSubtitle_(str(subtitle))
+        notification.setInformativeText_(str(text))
+        notification.setSoundName_("NSUserNotificationDefaultSoundName")
+        notification.setHasActionButton_(True)
+        notification.setOtherButtonTitle_("View")
+        notification.setUserInfo_({"action":"open_url", "value":url})
+        NSUserNotificationCenter.defaultUserNotificationCenter().setDelegate_(self)
+        NSUserNotificationCenter.defaultUserNotificationCenter().scheduleNotification_(notification)
+
+    def userNotificationCenter_didActivateNotification_(self, center, notification):
+        userInfo = notification.userInfo()
+        if userInfo["action"] == "open_url":
+            import subprocess
+            subprocess.Popen(['open', userInfo["value"]])
+"""
+
 import os
 activate_this = os.environ['HOME'] + '/envs/twitter/bin/activate_this.py'
 if os.path.exists(activate_this):
@@ -35,10 +59,34 @@ except:
     can_osd = False
 
 if sys.platform == 'darwin':
-    # Check for AppKit.
+    # Check for AppKit and Foundation
     try:
         import AppKit
+        import Foundation
+        import objc
         can_appkit = True
+        class MountainLionNotification(Foundation.NSObject):
+            def notify(self, title, subtitle, text, url):
+                NSUserNotification = objc.lookUpClass('NSUserNotification')
+                NSUserNotificationCenter = objc.lookUpClass('NSUserNotificationCenter')
+                notification = NSUserNotification.alloc().init()
+                notification.setTitle_(str(title))
+                notification.setSubtitle_(str(subtitle))
+                notification.setInformativeText_(str(text))
+                # FIXME: configure sound?
+                notification.setSoundName_("NSUserNotificationDefaultSoundName")
+                #notification.setSoundName_(None)
+                notification.setHasActionButton_(True)
+                notification.setOtherButtonTitle_("View")
+                notification.setUserInfo_({"action":"open_url", "value":url})
+                NSUserNotificationCenter.defaultUserNotificationCenter().setDelegate_(self)
+                NSUserNotificationCenter.defaultUserNotificationCenter().scheduleNotification_(notification)
+
+            def userNotificationCenter_didActivateNotification_(self, center, notification):
+                userInfo = notification.userInfo()
+                if userInfo["action"] == "open_url":
+                    import subprocess
+                    subprocess.Popen(['open', userInfo["value"]])
     except:
         can_appkit = False
 
@@ -189,6 +237,7 @@ twit.py <options>
              options.retweet or
              options.friends or
              options.conversation ):
+        sys.stderr.write("An action is required.\n")
         parser.print_help()
         sys.exit(1)
 
@@ -218,7 +267,7 @@ twit.py <options>
         sys.stderr.write("The --notify option is disabled.\n")
         parser.print_help()
         sys.exit(1)
-    elif sys.platform == 'darwin' and not can_appkit:
+    elif sys.platform == 'darwin' and not can_appkit and options.notify:
         sys.stderr.write("The --notify option is disabled.\n")
         parser.print_help()
         sys.exit(1)
@@ -229,6 +278,7 @@ twit.py <options>
         sys.exit(1)
 
     if args:
+        sys.stderr.write("Extra unsupported arguments found: %s\n" % args)
         parser.print_help()
         sys.exit(1)
 
@@ -275,31 +325,13 @@ def notify_libnotify(status, options):
     time.sleep(options.timeout)
 
 def notify_appkit(status, options):
-    """Thanks to
-    https://github.com/albertz/music-player/blob/master/notifications.py
-    for how to do this."""
-    global notifCenter
-    if not notifCenter:
-        # borrowed from
-        # http://stackoverflow.com/questions/6744633/hide-python-launcher-icon-for-new-qapplication
-        # https://developer.apple.com/library/mac/#documentation/AppKit/Reference/NSRunningApplication_Class/Reference/Reference.html
-        NSApplicationActivationPolicyRegular = 0
-        NSApplicationActivationPolicyAccessory = 1
-        NSApplicationActivationPolicyProhibited = 2
-        notifCenter = \
-            AppKit.NSUserNotificationCenter.defaultUserNotificationCenter()
-        app = AppKit.NSApplication.sharedApplication()
-        app.setActivationPolicy_(NSApplicationActivationPolicyProhibited)
-        appDelegate = app.delegate()
-        notifCenter.setDelegate_(appDelegate)
 
-    notif = AppKit.NSUserNotification.alloc().init()
-    title = "Tweet by %s" % status.user.name
-    notif.setTitle_(title)
-    notif.setInformativeText_(status.text)
-    url = 'http://home.digitaltorque.ca'
-    notif.setUserInfo_( {"action": "open_url", "value": url} )
-    notifCenter.deliverNotification_(notif)
+    notif = MountainLionNotification.alloc().init()
+    text = status.text.encode('utf8', 'ignore')
+    notif.notify("Tweet from %s" % status.user.name.encode('utf8', 'ignore'),
+                 status.user.screen_name.encode('utf8', 'ignore'),
+                 text,
+                 'http://home.digitaltorque.ca')
     time.sleep(options.timeout)
 
 def notify_post(status, options):
