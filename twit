@@ -10,7 +10,7 @@ from smtplib import SMTP
 from optparse import OptionParser
 import re
 from tweepy import TweepError
-import simplejson as json
+import json
 
 can_appkit = can_libnotify = can_osd = False
 # For OS X
