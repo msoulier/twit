@@ -36,7 +36,7 @@ import re
 from tweepy import TweepError
 import json
 
-can_appkit = can_libnotify = can_osd = False
+can_appkit = can_libnotify = can_osd = True
 # For OS X
 notifCenter = None
 
@@ -64,7 +64,6 @@ if sys.platform == 'darwin':
         import AppKit
         import Foundation
         import objc
-        can_appkit = True
         class MountainLionNotification(Foundation.NSObject):
             def notify(self, title, subtitle, text, url):
                 NSUserNotification = objc.lookUpClass('NSUserNotification')
