@@ -311,7 +311,6 @@ def retweet(api, options):
     api.retweet(retweet_id)
 
 def notify_libnotify(status, options):
-    pynotify.init("Twit")
     text = re.sub(r'(http://\S+)', r'<a href="\1">\1</a>', status.text)
     n = pynotify.Notification("Tweet by %s" % status.user.name, text)
     n.set_timeout(options.timeout * 1000)
@@ -491,6 +490,9 @@ def initialize(options):
             data = {}
     else:
         data = {}
+
+    if options.notify and can_libnotify:
+        pynotify.init("Twit")
 
 def cleanup(options):
     if data:
